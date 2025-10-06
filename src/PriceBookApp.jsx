@@ -36,6 +36,7 @@ const PriceBookApp = () => {
 
     const setupAuth = async () => {
       try {
+        // Sign in using the provided token if available, otherwise sign in anonymously
         if (initialAuthToken) {
           await signInWithCustomToken(auth, initialAuthToken);
         } else {
@@ -59,12 +60,13 @@ const PriceBookApp = () => {
 
     setupAuth();
     return () => unsubscribe();
-  }, []);
+  }, [auth, db]);
 
   // --- Real-time Data Fetching ---
   useEffect(() => {
     if (!isAuthenticated || !userId || !db) return;
 
+    // Firestore Path: /artifacts/{appId}/users/{userId}/price_book
     const priceBookPath = `artifacts/${appId}/users/${userId}/price_book`;
     const q = query(collection(db, priceBookPath), orderBy('timestamp', 'desc'));
 
@@ -72,6 +74,7 @@ const PriceBookApp = () => {
       const fetchedItems = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
+        // Ensure price fields are numeric for calculations
         price: Number(doc.data().price),
         quantity: Number(doc.data().quantity),
         rockBottomPrice: Number(doc.data().rockBottomPrice),
@@ -79,6 +82,7 @@ const PriceBookApp = () => {
       }));
       setItems(fetchedItems);
       
+      // Calculate unique items for the dropdown selector
       const uniqueNames = [...new Set(fetchedItems.map(item => item.name))].sort();
       setUniqueItems(uniqueNames);
     }, (error) => {
@@ -86,7 +90,7 @@ const PriceBookApp = () => {
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, userId]);
+  }, [isAuthenticated, userId, db]);
 
   // --- Historical Low Price Calculation ---
   const historicalLowPrice = useMemo(() => {
@@ -114,10 +118,12 @@ const PriceBookApp = () => {
                 ...prev,
                 name: lastEntry.name,
                 unit: lastEntry.unit || 'oz', 
-                rockBottomPrice: historicalLowPrice > 0 ? historicalLowPrice : lastEntry.rockBottomPrice, 
+                // Only use historical price if a valid historical price exists
+                rockBottomPrice: historicalLowPrice > 0 ? historicalLowPrice.toFixed(4) : (lastEntry.rockBottomPrice ? lastEntry.rockBottomPrice.toFixed(4) : ''), 
             }));
         }
     } else {
+        // Reset form for new manual entry
         setForm({ name: '', price: '', quantity: '', unit: 'oz', rockBottomPrice: '', store: '' });
     }
   };
@@ -125,11 +131,13 @@ const PriceBookApp = () => {
   // --- Unit Price Calculation ---
   const calculateUnitPrice = (price, quantity) => {
     if (price <= 0 || quantity <= 0) return 0;
-    return parseFloat((price / quantity).toFixed(4)); 
+    // Round to 5 decimal places to maintain precision for small unit prices
+    return parseFloat((price / quantity).toFixed(5)); 
   };
 
   const handleFormChange = (e) => {
     const { name, value } = e.target;
+    // If typing manually, update the selected item name
     if (name === 'name') {
       setSelectedItem(value);
     }
@@ -155,14 +163,24 @@ const PriceBookApp = () => {
 
     const priceNum = parseFloat(form.price);
     const quantityNum = parseFloat(form.quantity);
-    const rockBottomNum = parseFloat(form.rockBottomPrice) || 0; 
+    // Parse rockBottomPrice from string, default to 0 if empty
+    let rockBottomNum = parseFloat(form.rockBottomPrice) || 0; 
 
     if (!form.name || priceNum <= 0 || quantityNum <= 0) {
-      console.error("Validation Error: Please fill out Item Name, Price, and Quantity with positive numbers.");
+      alert("Validation Error: Please fill out Item Name, Price, and Quantity with positive numbers.");
       return;
     }
 
     const unitPriceCalculated = calculateUnitPrice(priceNum, quantityNum);
+
+    // Update Rock Bottom Price logic: if the current purchase is lower than the historical low, update the rock bottom target
+    if (historicalLowPrice > 0) {
+        rockBottomNum = Math.min(rockBottomNum, historicalLowPrice, unitPriceCalculated);
+    } else if (rockBottomNum === 0) {
+        // If no historical low and no target set, the current price is the initial rock bottom
+        rockBottomNum = unitPriceCalculated;
+    }
+
 
     const newItem = {
       name: form.name.trim(),
@@ -170,7 +188,7 @@ const PriceBookApp = () => {
       quantity: quantityNum,
       unit: form.unit,
       store: form.store.trim() || 'Unknown',
-      rockBottomPrice: Math.min(rockBottomNum, historicalLowPrice > 0 ? historicalLowPrice : Infinity),
+      rockBottomPrice: rockBottomNum,
       unitPrice: unitPriceCalculated,
       timestamp: serverTimestamp(),
     };
@@ -178,6 +196,7 @@ const PriceBookApp = () => {
     try {
       const priceBookPath = `artifacts/${appId}/users/${userId}/price_book`;
       await addDoc(collection(db, priceBookPath), newItem);
+      // Clear form after successful submission
       setForm({ name: '', price: '', quantity: '', unit: 'oz', rockBottomPrice: '', store: '' });
       setSelectedItem('');
     } catch (error) {
@@ -191,9 +210,11 @@ const PriceBookApp = () => {
       return <span className="text-gray-500">No Target Set</span>;
     }
     
+    // Check if the current entry price is the rock bottom (or lower than previous rock bottom)
+    const isRockBottom = item.unitPrice <= historicalLowPrice || (historicalLowPrice === 0 && item.unitPrice === item.rockBottomPrice);
     const isGoodDeal = item.unitPrice <= item.rockBottomPrice;
-    const isRockBottom = item.unitPrice === item.rockBottomPrice;
     
+    // Check if price is within 10% of target
     const isCloseDeal = item.unitPrice > item.rockBottomPrice && item.unitPrice <= item.rockBottomPrice * 1.1;
 
     if (isRockBottom) {
@@ -210,17 +231,21 @@ const PriceBookApp = () => {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <p className="text-xl text-gray-700">Loading Frugal Price Book...</p>
+        <div className="flex flex-col items-center p-8">
+            <svg className="animate-spin h-8 w-8 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p className="mt-3 text-xl text-gray-700">Loading Frugal Price Book securely...</p>
+        </div>
       </div>
     );
   }
 
   // Helper to format unit price clearly
   const formatUnitPrice = (price) => {
-    if (price < 0.001) {
-        return `$${price.toFixed(5)}`;
-    }
-    return `$${price.toFixed(4)}`; 
+    // Show 5 decimal places for precision on very small unit prices
+    return `$${price.toFixed(5)}`; 
   };
   
   // Helper to format currency
@@ -352,9 +377,9 @@ const PriceBookApp = () => {
                         name="rockBottomPrice"
                         value={form.rockBottomPrice}
                         onChange={handleFormChange}
-                        placeholder={`$${historicalLowPrice > 0 ? historicalLowPrice.toFixed(4) : '0.00'}`}
+                        placeholder={`$${historicalLowPrice > 0 ? historicalLowPrice.toFixed(5) : '0.00'}`}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500 transition duration-150"
-                        step="0.0001"
+                        step="0.00001"
                     />
                 </div>
             </div>
