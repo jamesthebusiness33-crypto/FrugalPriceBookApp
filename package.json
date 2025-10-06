@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "A zero-cost utility for tracking rock bottom grocery prices, built for The Frugal Footprint.",
   "main": "src/index.js",
+  "homepage": "./", 
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",

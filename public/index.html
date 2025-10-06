@@ -18,7 +18,9 @@
     <!-- This is where the React application will be mounted -->
     <div id="root"></div>
     
-    <!-- The main script that renders the PriceBookApp -->
-    <script type="module" src="../src/index.js"></script>
+    <!-- The main script that renders the PriceBookApp. The actual path is handled by the build process. -->
+    <!-- We remove the type="module" and simplify the src to let the build tool handle injection -->
+    <!-- The tool will now look for the generated main JS file -->
+    <script src="/static/js/main.js"></script> 
 </body>
 </html>
