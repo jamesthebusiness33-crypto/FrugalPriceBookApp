@@ -3,12 +3,17 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 
-// --- Global Firebase Configuration (Mandatory Setup) ---
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+// --- Global Firebase Configuration (Optional Setup) ---
+// Check if Firebase config is provided via global variables (for Netlify deployment)
+const appId = (typeof window !== 'undefined' && window.__app_id) ? window.__app_id : 'demo-app';
+const firebaseConfig = (typeof window !== 'undefined' && window.__firebase_config) 
+  ? JSON.parse(window.__firebase_config) 
+  : {};
+const initialAuthToken = (typeof window !== 'undefined' && window.__initial_auth_token) 
+  ? window.__initial_auth_token 
+  : null;
 
-// Initialize Firebase services outside the component
+// Initialize Firebase services only if config is provided
 const app = Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : null;
 const db = app ? getFirestore(app) : null;
 const auth = app ? getAuth(app) : null;
@@ -30,9 +35,33 @@ const PriceBookApp = () => {
     store: '',
   });
 
+  // Check if Firebase is configured
+  const isFirebaseConfigured = app && db && auth;
+
   // --- Auth & Firestore Setup ---
   useEffect(() => {
-    if (!auth || !db) return;
+    if (!isFirebaseConfigured) {
+      // Demo mode - use local storage and simulate authentication
+      setIsAuthenticated(true);
+      setUserId('demo-user');
+      setLoading(false);
+      
+      // Load items from localStorage
+      const savedItems = localStorage.getItem('frugal-price-book-items');
+      if (savedItems) {
+        try {
+          const parsedItems = JSON.parse(savedItems);
+          setItems(parsedItems);
+          
+          // Calculate unique items
+          const uniqueNames = [...new Set(parsedItems.map(item => item.name))].sort();
+          setUniqueItems(uniqueNames);
+        } catch (error) {
+          console.error('Error parsing saved items:', error);
+        }
+      }
+      return;
+    }
 
     const setupAuth = async () => {
       try {
@@ -60,11 +89,14 @@ const PriceBookApp = () => {
 
     setupAuth();
     return () => unsubscribe();
-  }, [auth, db]);
+  }, [isFirebaseConfigured]);
 
   // --- Real-time Data Fetching ---
   useEffect(() => {
-    if (!isAuthenticated || !userId || !db) return;
+    if (!isAuthenticated || !userId) return;
+    
+    // Skip Firestore setup if not configured (already loaded from localStorage in auth effect)
+    if (!isFirebaseConfigured) return;
 
     // Firestore Path: /artifacts/{appId}/users/{userId}/price_book
     const priceBookPath = `artifacts/${appId}/users/${userId}/price_book`;
@@ -90,7 +122,7 @@ const PriceBookApp = () => {
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, userId, db]);
+  }, [isAuthenticated, userId, isFirebaseConfigured]);
 
   // --- Historical Low Price Calculation ---
   const historicalLowPrice = useMemo(() => {
@@ -156,8 +188,8 @@ const PriceBookApp = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!isAuthenticated || !db) {
-      console.error("App not authenticated or database not ready.");
+    if (!isAuthenticated) {
+      console.error("App not authenticated.");
       return;
     }
 
@@ -181,8 +213,8 @@ const PriceBookApp = () => {
         rockBottomNum = unitPriceCalculated;
     }
 
-
     const newItem = {
+      id: Date.now().toString(), // Simple ID for demo mode
       name: form.name.trim(),
       price: priceNum,
       quantity: quantityNum,
@@ -190,17 +222,33 @@ const PriceBookApp = () => {
       store: form.store.trim() || 'Unknown',
       rockBottomPrice: rockBottomNum,
       unitPrice: unitPriceCalculated,
-      timestamp: serverTimestamp(),
+      timestamp: new Date().toISOString(),
     };
 
     try {
-      const priceBookPath = `artifacts/${appId}/users/${userId}/price_book`;
-      await addDoc(collection(db, priceBookPath), newItem);
+      if (isFirebaseConfigured) {
+        // Use Firestore
+        const priceBookPath = `artifacts/${appId}/users/${userId}/price_book`;
+        await addDoc(collection(db, priceBookPath), {
+          ...newItem,
+          timestamp: serverTimestamp()
+        });
+      } else {
+        // Use local storage
+        const updatedItems = [newItem, ...items];
+        setItems(updatedItems);
+        localStorage.setItem('frugal-price-book-items', JSON.stringify(updatedItems));
+        
+        // Update unique items
+        const uniqueNames = [...new Set(updatedItems.map(item => item.name))].sort();
+        setUniqueItems(uniqueNames);
+      }
+      
       // Clear form after successful submission
       setForm({ name: '', price: '', quantity: '', unit: 'oz', rockBottomPrice: '', store: '' });
       setSelectedItem('');
     } catch (error) {
-      console.error("Error adding document:", error);
+      console.error("Error adding item:", error);
     }
   };
 
@@ -265,6 +313,11 @@ const PriceBookApp = () => {
             <p className="mt-2 text-gray-500 text-lg">
               Automate the math and track your personal "Rock Bottom Price."
             </p>
+            {!isFirebaseConfigured && (
+              <div className="mt-2 px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium inline-block">
+                Demo Mode - Data stored locally in your browser
+              </div>
+            )}
           </div>
           <div className="text-right">
             <div className="text-xs text-gray-400">
